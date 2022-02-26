@@ -39,6 +39,7 @@
 #include <cregistry/portgroup.h>
 #include <cregistry/entry.h>
 #include <cregistry/file.h>
+#include <cregistry/distfile.h>
 
 typedef struct {
     char* option;
@@ -79,6 +80,10 @@ int file_to_obj(Tcl_Interp* interp, Tcl_Obj** ibj, reg_file* file,
         void* param UNUSED, reg_error* errPtr);
 int list_file_to_obj(Tcl_Interp* interp, Tcl_Obj*** objs,
         reg_file** files, int file_count, reg_error* errPtr);
+int distfile_to_obj(Tcl_Interp* interp, Tcl_Obj** ibj, reg_distfile* distfile,
+        void* param UNUSED, reg_error* errPtr);
+int list_distfile_to_obj(Tcl_Interp* interp, Tcl_Obj*** objs,
+        reg_distfile** distfiles, int distfile_count, reg_error* errPtr);
 int portgroup_to_obj(Tcl_Interp* interp, Tcl_Obj** ibj, reg_portgroup* portgroup,
         void* param UNUSED, reg_error* errPtr);
 int list_portgroup_to_obj(Tcl_Interp* interp, Tcl_Obj*** objs,

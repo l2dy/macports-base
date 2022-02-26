@@ -44,6 +44,7 @@
 #include "entry.h"
 #include "entryobj.h"
 #include "file.h"
+#include "distfile.h"
 #include "portgroup.h"
 #include "registry.h"
 #include "util.h"
@@ -85,6 +86,7 @@ int registry_tcl_detach(Tcl_Interp* interp, reg_registry* reg,
         reg_error* errPtr) {
     reg_entry** entries;
     reg_file** files;
+    reg_distfile** distfiles;
     reg_portgroup** portgroups;
     int count;
     int i;
@@ -110,6 +112,17 @@ int registry_tcl_detach(Tcl_Interp* interp, reg_registry* reg,
         }
     }
     free(files);
+
+    count = reg_all_open_distfiles(reg, &distfiles);
+    if (count == -1) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        if (distfiles[i]->proc) {
+            Tcl_DeleteCommand(interp, distfiles[i]->proc);
+        }
+    }
+    free(distfiles);
 
     count = reg_all_open_portgroups(reg, &portgroups);
     if (count == -1) {
@@ -404,6 +417,7 @@ int Registry_Init(Tcl_Interp* interp) {
     Tcl_CreateObjCommand(interp, "registry::write", registry_write, NULL, NULL);
     Tcl_CreateObjCommand(interp, "registry::entry", entry_cmd, NULL, NULL);
     Tcl_CreateObjCommand(interp, "registry::file", file_cmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "registry::distfile", distfile_cmd, NULL, NULL);
     Tcl_CreateObjCommand(interp, "registry::portgroup", portgroup_cmd, NULL, NULL);
     Tcl_CreateObjCommand(interp, "registry::metadata", metadata_cmd, NULL, NULL);
     if (Tcl_PkgProvide(interp, "registry2", "2.0") != TCL_OK) {

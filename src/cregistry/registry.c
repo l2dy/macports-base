@@ -34,6 +34,7 @@
 #include "portgroup.h"
 #include "entry.h"
 #include "file.h"
+#include "distfile.h"
 #include "sql.h"
 
 #include <stdio.h>
@@ -67,6 +68,7 @@ char *const registry_err_sqlite_error   = "registry::sqlite-error";
 char *const registry_err_misuse         = "registry::misuse";
 char *const registry_err_cannot_init    = "registry::cannot-init";
 char *const registry_err_already_active = "registry::already-active";
+char *const registry_err_out_of_memory  = "registry::oom";
 
 /**
  * Destroys a `reg_error` object. This should be called on any reg_error when a
@@ -258,6 +260,8 @@ int reg_attach(reg_registry* reg, const char* path, reg_error* errPtr) {
                                     sizeof(sqlite_int64)/sizeof(int));
                             Tcl_InitHashTable(&reg->open_files,
                                     TCL_STRING_KEYS);
+                            Tcl_InitHashTable(&reg->open_distfiles,
+                                    sizeof(sqlite_int64)/sizeof(int));
                             Tcl_InitHashTable(&reg->open_portgroups,
                                     sizeof(sqlite_int64)/sizeof(int));
                             reg->status |= reg_attached;
@@ -342,6 +346,20 @@ int reg_detach(reg_registry* reg, reg_error* errPtr) {
                         free(file);
                     }
                     Tcl_DeleteHashTable(&reg->open_files);
+
+                    for (curr = Tcl_FirstHashEntry(&reg->open_distfiles, &search);
+                            curr != NULL; curr = Tcl_NextHashEntry(&search)) {
+                        reg_distfile* distfile = Tcl_GetHashValue(curr);
+
+                        if (distfile->proc) {
+                            free(distfile->proc);
+                        }
+                        /* The rest of the reg_distfile structure is not
+                           cleaned up by delete_distfile, so this should
+                           always be safe. */
+                        free(distfile);
+                    }
+                    Tcl_DeleteHashTable(&reg->open_distfiles);
 
                     for (curr = Tcl_FirstHashEntry(&reg->open_portgroups, &search);
                             curr != NULL; curr = Tcl_NextHashEntry(&search)) {

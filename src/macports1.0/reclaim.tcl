@@ -182,22 +182,25 @@ namespace eval reclaim {
         }
     }
 
-    proc walk_files {dir files_in_use unused_name} {
+    proc walk_files {root dir files_in_use unused_name} {
         # Recursively walk the given directory $dir and build a list of all files that are present on-disk but not listed in $files_in_use.
         # The list of unused files will be stored in the variable given by $unused_name
         #
         # Args:
-        #           dir             - A string path of the given directory to walk through
-        #           files_in_use    - A sorted list of the full paths for all distfiles from installed ports
+        #           root            - The root directory of relative paths
+        #           dir             - Relative path of the given directory to walk through
+        #           files_in_use    - A sorted list of the relative paths for all distfiles from installed ports
         #           unused_name     - The name of a list in the caller to which unused files will be appended
 
         upvar $unused_name unused
 
-        foreach item [readdir $dir] {
+        set fullDir [file join $root $dir]
+        foreach item [readdir $fullDir] {
             set currentPath [file join $dir $item]
-            switch -exact -- [file type $currentPath] {
+            set fullPath [file join $root $currentPath]
+            switch -exact -- [file type $fullPath] {
                 directory {
-                    walk_files $currentPath $files_in_use unused
+                    walk_files $root $currentPath $files_in_use unused
                 }
                 file {
                     if {$item eq ".turd_MacPorts" || $item eq ".DS_Store"} {
@@ -210,65 +213,11 @@ namespace eval reclaim {
                         continue
                     }
                     if {[lsearch -exact -sorted $files_in_use $currentPath] == -1} {
-                        ui_info "Found unused distfile $currentPath"
-                        lappend unused $currentPath
+                        ui_info "Found unused distfile $fullPath"
+                        lappend unused $fullPath
                     }
                 }
             }
-        }
-    }
-
-    # return the variations that would be used when upgrading a port
-    # installed with the given requested variants
-    proc get_variations {installed_variants} {
-        array set vararray {}
-        foreach v [array names macports::global_variations] {
-            set vararray($v) $macports::global_variations($v)
-        }
-        set splitvariant [split $installed_variants -]
-        set minusvariant [lrange $splitvariant 1 end]
-        set splitvariant [split [lindex $splitvariant 0] +]
-        set plusvariant [lrange $splitvariant 1 end]
-        foreach v $plusvariant {
-            set vararray($v) +
-        }
-        foreach v $minusvariant {
-            set vararray($v) -
-        }
-        return [array get varray]
-    }
-
-    proc load_distfile_cache {varname} {
-        upvar $varname var
-        try -pass_signal {
-            set fd [open |[list $macports::autoconf::gzip_path -d < [file join $macports::portdbpath reclaim distfiles.gz]] r]
-            set data [gets $fd]
-            close $fd
-            array set var $data
-            if {$var(:global_variations) ne [array get macports::global_variations]} {
-                array unset var
-                array set var [list]
-            } else {
-                unset var(:global_variations)
-            }
-        } catch {{*} eCode eMessage} {
-            ui_debug "Failed to load distfiles cache: $eMessage"
-            array set var [list]
-            catch {close $fd}
-        }
-    }
-
-    proc save_distfile_cache {varname} {
-        upvar $varname var
-        try -pass_signal {
-            file mkdir [file join $macports::portdbpath reclaim]
-            set fd [open |[list $macports::autoconf::gzip_path > [file join $macports::portdbpath reclaim distfiles.gz]] w]
-            set var(:global_variations) [array get macports::global_variations]
-            puts $fd [array get var]
-            close $fd
-        } catch {{*} eCode eMessage} {
-            ui_debug "Failed to save distfiles cache: $eMessage"
-            catch {close $fd}
         }
     }
 
@@ -300,95 +249,21 @@ namespace eval reclaim {
         }
 
         ui_msg "$macports::ui_prefix Building list of distfiles still in use"
-        load_distfile_cache distfile_cache_prev
         set installed_ports [registry::entry imaged]
         set port_count [llength $installed_ports]
         set i 1
         $progress start
 
         foreach port $installed_ports {
-            # skip additional versions installed with the same variants
-            set cache_key [$port name],[$port requested_variants]
-            if {[info exists distfile_cache_new($cache_key)]} {
-                continue
+            foreach distfile [registry::distfile search id [$port id]] {
+                lappend files_in_use [file join [$distfile subdir] [$distfile path]]
+                registry::distfile close $distfile
             }
 
-            array unset cacheinfo
-            array unset portinfo
-            if {[catch {mportlookup [$port name]} lookup_result] || [llength $lookup_result] < 2} {
-                ui_warn [msgcat::mc "Port %s not found: %s" [$port name] $lookup_result]
-                continue
-            }
-            array set portinfo [lindex $lookup_result 1]
-
-            set parse_needed yes
-            set portfile_hash [sha256 file [file join [macports::getportdir $portinfo(porturl)] Portfile]]
-            set fingerprint $portinfo(version)_$portinfo(revision)_${portfile_hash}
-            if {[info exists distfile_cache_prev($cache_key)]} {
-                array set cacheinfo $distfile_cache_prev($cache_key)
-                if {$cacheinfo(fingerprint) eq $fingerprint} {
-                    set parse_needed no
-                    set distfile_cache_new($cache_key) $distfile_cache_prev($cache_key)
-                }
-            }
-
-            if {$parse_needed} {
-                set cacheinfo(fingerprint) $fingerprint
-                # Get mport reference
-                try -pass_signal {
-                    set mport [mportopen $portinfo(porturl) [list subport $portinfo(name)] [get_variations [$port requested_variants]]]
-                } catch {{*} eCode eMessage} {
-                    $progress intermission
-                    ui_warn [msgcat::mc "Failed to open port %s %s: %s" [$port name] [$port requested_variants] $eMessage]
-                    #registry::entry close $port
-                    continue
-                }
-
-                # Get sub-Tcl-interpreter that executed the installed port
-                set workername [ditem_key $mport workername]
-
-                # Append that port's distfiles to the list
-                set cacheinfo(dist_subdir) [$workername eval {set dist_subdir}]
-                set distfiles   [$workername eval {set distfiles}]
-                if {[catch {$workername eval {set patchfiles}} patchfiles]} {
-                    set patchfiles [list]
-                }
-                set filespath [$workername eval {set filespath}]
-
-                set cacheinfo(distfiles) [list]
-                foreach file [concat $distfiles $patchfiles] {
-                    # get filename without any tag
-                    set distfile [$workername eval [list getdistname $file]]
-                    if {![file exists [file join $filespath $distfile]]} {
-                        lappend cacheinfo(distfiles) $distfile
-                    }
-                }
-                set distfile_cache_new($cache_key) [array get cacheinfo]
-                mportclose $mport
-            }
-
-            foreach distfile $cacheinfo(distfiles) {
-                set root_path [file join $root_dist $cacheinfo(dist_subdir) $distfile]
-                set home_path [file join $home_dist $cacheinfo(dist_subdir) $distfile]
-
-                # Add the full file path to the list, depending where it's located.
-                if {[file isfile $root_path]} {
-                    ui_info "Keeping $root_path"
-                    lappend files_in_use $root_path
-                }
-                if {[file isfile $home_path]} {
-                    ui_info "Keeping $home_path"
-                    lappend files_in_use $home_path
-                }
-            }
-
+            registry::entry close $port
             $progress update $i $port_count
-            #registry::entry close $port
             incr i
         }
-        array unset distfile_cache_prev
-        save_distfile_cache distfile_cache_new
-        array unset distfile_cache_new
 
         $progress finish
 
@@ -400,11 +275,11 @@ namespace eval reclaim {
         ui_debug "Calling walk_files on root directory."
 
         set superfluous_files [list]
-        walk_files $root_dist $files_in_use superfluous_files
+        walk_files $root_dist "" $files_in_use superfluous_files
 
         if {[file exists $home_dist]} {
             ui_debug "Calling walk_files on home directory."
-            walk_files $home_dist $files_in_use superfluous_files
+            walk_files $home_dist "" $files_in_use superfluous_files
         }
 
         set num_superfluous_files [llength $superfluous_files]
